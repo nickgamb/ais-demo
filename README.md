@@ -86,23 +86,23 @@ Open http://localhost:8890.
 sequenceDiagram
     participant User
     participant Browser
-    participant AIS as AIS Web (Go)
+    participant AIS as AIS Web
     participant Guard
-    participant Tools as Tools (Ollama / http.get)
+    participant Tools
     participant Audit
 
-    User->>Browser: Type message / Run Agent
-    Browser->>AIS: POST /api/chat/send { messages, UIA }
-    AIS->>AIS: Build APA from messages/tools
-    AIS->>AIS: Compute APr via VerifyAlignment(UIA, APA)
-    AIS->>AIS: Create IBE (UIA_ref, APA_step, APr_ref, TCA) + JWS
-    AIS->>Guard: VerifyIBE(IBE, APr, UIA, APA, TCA)
-    Guard->>Guard: Recompute alignment; check sigs, budgets, data classes, TCA
+    User->>Browser: Type message or Run Agent
+    Browser->>AIS: POST /api/chat/send with messages and UIA
+    AIS->>AIS: Build APA from messages and tools
+    AIS->>AIS: Compute APr via VerifyAlignment of UIA and APA
+    AIS->>AIS: Create IBE with UIA_ref APA_step APr_ref TCA and JWS
+    AIS->>Guard: VerifyIBE with IBE APr UIA APA TCA
+    Guard->>Guard: Recompute alignment and check sigs budgets data classes TCA
     Guard-->>AIS: OK or 403
-    AIS->>Tools: If OK, invoke tool (ollama.generate / http.get)
+    AIS->>Tools: If OK invoke tool ollama.generate or http.get
     Tools-->>AIS: Result
-    AIS->>Audit: Append SSE event (UIA/APA/APr refs, IBE id, tool)
-    AIS-->>Browser: Assistant text + { UIA, APA, APr }
+    AIS->>Audit: Append SSE event with references and ids
+    AIS-->>Browser: Assistant text with UIA APA APr
 ```
 
 Legend:
@@ -133,13 +133,6 @@ Key components:
 - Demo JWS HS256 is for illustration; for production use JWS/VC/SD‑JWT with proper key mgmt/rotation.
 - IBE signatures include freshness (nonce/expiry). Do not reuse nonces; keep expiry short.
 - The guard enforces alignment threshold, risk budgets, and compatibility checks before any tool call.
-
----
-
-## Limitations
-- Alignment verifier is deterministic and heuristic (semantic‑entailment‑v1). It uses keyword
-  entailment and basic risk signals; replace or extend with a formal verifier as needed.
-- Audit is in-memory/SSE (no persistence).
 
 ---
 
