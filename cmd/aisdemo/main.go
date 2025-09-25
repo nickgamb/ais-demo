@@ -57,6 +57,23 @@ Prompt: <br/>
 </form>
 </br>
 <script>
+async function refreshModelList(){
+  try{
+    const r = await fetch('/model/list');
+    const j = await r.json();
+    const sel = document.getElementById('modelSel');
+    sel.innerHTML = '';
+    (j.models||[]).forEach(name => {
+      const opt = document.createElement('option'); opt.value = name; opt.textContent = name; sel.appendChild(opt);
+    });
+    sel.onchange = async ()=>{
+      const chosen = sel.value;
+      await fetch('/model/select', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({model: chosen})});
+      checkModel();
+    };
+  }catch(_){ }
+}
+
 async function checkModel(){
   const s = document.getElementById('modelStatus');
   const p = document.getElementById('progress');
@@ -210,6 +227,23 @@ let intentConfirmed = false;
 let currentIntent = null;
 let uiaEd, apaEd, aprEd, stepsEd;
 let auditEd;
+
+async function refreshModelList(){
+  try{
+    const r = await fetch('/model/list');
+    const j = await r.json();
+    const sel = document.getElementById('modelSel');
+    sel.innerHTML = '';
+    (j.models||[]).forEach(name => {
+      const opt = document.createElement('option'); opt.value = name; opt.textContent = name; sel.appendChild(opt);
+    });
+    sel.onchange = async ()=>{
+      const chosen = sel.value;
+      await fetch('/model/select', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({model: chosen})});
+      checkModel();
+    };
+  }catch(_){ }
+}
 
 function addMsg(role, content){
   msgs.push({role, content});
@@ -433,12 +467,15 @@ func handleConfirm(w http.ResponseWriter, r *http.Request) {
 			ID: "s1", Tool: "ollama.generate",
 			Args: map[string]any{"prompt": prompt},
 			Expected: ais.StepExpected{DataClasses: []string{"derived"}, Writes: 0},
-			Alignment: ais.StepAlignment{Score: 0.9, Why: "generate summary"},
+			Alignment: ais.StepAlignment{Score: 0.0, Why: "semantic entailment"},
 		}},
 		Totals: ais.APATotals{PredictedWrites: 0, PredictedRecords: 1},
 		Proof: map[string]any{},
 	}
-    apr := ais.APr{Type: "APr", ID: nowID(), UIA: uia.ID, APA: apa.ID, Method: "semantic-entailment-v1", Evidence: ais.APrEvidence{Coverage: 1.0, Risk: 0.0}, Proof: map[string]any{}}
+	// Compute deterministic alignment evidence and reflect it in APr and step alignment
+	cov, risk := ais.VerifyAlignment(uia, apa)
+	apa.Steps[0].Alignment.Score = cov
+	apr := ais.APr{Type: "APr", ID: nowID(), UIA: uia.ID, APA: apa.ID, Method: "semantic-entailment-v1", Evidence: ais.APrEvidence{Coverage: cov, Risk: risk}, Proof: map[string]any{}}
 
 	uiaJSON, _ := json.MarshalIndent(uia, "", "  ")
 	apaJSON, _ := json.MarshalIndent(apa, "", "  ")
@@ -577,12 +614,14 @@ func handleChatSend(w http.ResponseWriter, r *http.Request) {
         }
     }
     prompt := sb.String()
-    step := ais.APAStep{ID: "s1", Tool: "ollama.generate", Args: map[string]any{"prompt": prompt}, Expected: ais.StepExpected{DataClasses: []string{"derived"}, Writes: 0}, Alignment: ais.StepAlignment{Score: 1.0}}
+    step := ais.APAStep{ID: "s1", Tool: "ollama.generate", Args: map[string]any{"prompt": prompt}, Expected: ais.StepExpected{DataClasses: []string{"derived"}, Writes: 0}, Alignment: ais.StepAlignment{Score: 0.0, Why: "semantic entailment"}}
     if req.Tool == "http.get" {
-        step = ais.APAStep{ID: "s1", Tool: "http.get", Args: map[string]any{"url": req.URL}, Expected: ais.StepExpected{DataClasses: []string{"derived"}, Writes: 0}, Alignment: ais.StepAlignment{Score: 1.0}}
+        step = ais.APAStep{ID: "s1", Tool: "http.get", Args: map[string]any{"url": req.URL}, Expected: ais.StepExpected{DataClasses: []string{"derived"}, Writes: 0}, Alignment: ais.StepAlignment{Score: 0.0, Why: "semantic entailment"}}
     }
     apa := ais.APA{Type: "APA", ID: nowID(), UIA: req.UIA.ID, Model: ais.ModelInfo{Hash: "ollama-local"}, Steps: []ais.APAStep{step}, Totals: ais.APATotals{PredictedWrites: 0, PredictedRecords: 1}, Proof: map[string]any{}}
-	apr := ais.APr{Type: "APr", ID: nowID(), UIA: req.UIA.ID, APA: apa.ID, Method: "semantic-entailment-v1", Evidence: ais.APrEvidence{Coverage: 1.0, Risk: 0.0}, Proof: map[string]any{}}
+    cov, risk := ais.VerifyAlignment(req.UIA, apa)
+    apa.Steps[0].Alignment.Score = cov
+	apr := ais.APr{Type: "APr", ID: nowID(), UIA: req.UIA.ID, APA: apa.ID, Method: "semantic-entailment-v1", Evidence: ais.APrEvidence{Coverage: cov, Risk: risk}, Proof: map[string]any{}}
 
     tca := ais.TCA{ID: "urn:tca:ollama.generate@1", Operations: []ais.TCAOperation{{Name: "ollama.generate", Effects: ais.OperationEffects{Writes: 0, DataClasses: []string{"derived"}}}}, Operator: "local"}
     if req.Tool == "http.get" {
@@ -631,9 +670,11 @@ func handlePlan(w http.ResponseWriter, r *http.Request) {
         return
     }
     // Build a plan (APA/APr) without executing tools
-    step := ais.APAStep{ID: "s1", Tool: "ollama.generate", Args: map[string]any{"prompt": "planned"}, Expected: ais.StepExpected{DataClasses: []string{"derived"}, Writes: 0}, Alignment: ais.StepAlignment{Score: 1.0}}
+    step := ais.APAStep{ID: "s1", Tool: "ollama.generate", Args: map[string]any{"prompt": "planned"}, Expected: ais.StepExpected{DataClasses: []string{"derived"}, Writes: 0}, Alignment: ais.StepAlignment{Score: 0.0, Why: "semantic entailment"}}
     apa := ais.APA{Type: "APA", ID: nowID(), UIA: req.UIA.ID, Model: ais.ModelInfo{Hash: "ollama-local"}, Steps: []ais.APAStep{step}, Totals: ais.APATotals{PredictedWrites: 0, PredictedRecords: 1}, Proof: map[string]any{}}
-    apr := ais.APr{Type: "APr", ID: nowID(), UIA: req.UIA.ID, APA: apa.ID, Method: "semantic-entailment-v1", Evidence: ais.APrEvidence{Coverage: 1.0, Risk: 0.0}, Proof: map[string]any{}}
+    cov, risk := ais.VerifyAlignment(req.UIA, apa)
+    apa.Steps[0].Alignment.Score = cov
+    apr := ais.APr{Type: "APr", ID: nowID(), UIA: req.UIA.ID, APA: apa.ID, Method: "semantic-entailment-v1", Evidence: ais.APrEvidence{Coverage: cov, Risk: risk}, Proof: map[string]any{}}
     w.Header().Set("content-type", "application/json")
     _ = json.NewEncoder(w).Encode(map[string]any{"uia": req.UIA, "apa": apa, "apr": apr})
 }

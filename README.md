@@ -81,12 +81,36 @@ Open http://localhost:8890.
 ---
 
 ## Architecture
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Browser
+    participant AIS as AIS Web (Go)
+    participant Guard
+    participant Tools as Tools (Ollama / http.get)
+    participant Audit
+
+    User->>Browser: Type message / Run Agent
+    Browser->>AIS: POST /api/chat/send { messages, UIA }
+    AIS->>AIS: Build APA from messages/tools
+    AIS->>AIS: Compute APr via VerifyAlignment(UIA, APA)
+    AIS->>AIS: Create IBE (UIA_ref, APA_step, APr_ref, TCA) + JWS
+    AIS->>Guard: VerifyIBE(IBE, APr, UIA, APA, TCA)
+    Guard->>Guard: Recompute alignment; check sigs, budgets, data classes, TCA
+    Guard-->>AIS: OK or 403
+    AIS->>Tools: If OK, invoke tool (ollama.generate / http.get)
+    Tools-->>AIS: Result
+    AIS->>Audit: Append SSE event (UIA/APA/APr refs, IBE id, tool)
+    AIS-->>Browser: Assistant text + { UIA, APA, APr }
 ```
-Browser -> AIS Demo Web (Go)
-  UIA (intent) ----->
-  APA/APr (plan+proof)
-  IBE (per-call) ----> Guard -> Tools (Ollama /api/generate, http.get, ...)
-```
+
+Legend:
+- UIA: User Intent Assertion (why/what + constraints, risk budget)
+- APA: Agent Plan Assertion (steps, expected effects, alignment)
+- APr: Alignment Proof (method + evidence {coverage, risk})
+- IBE: Intent‑Bound Envelope (per‑call, signed, includes refs + expiry)
+- TCA: Tool Capability Attestation (server‑declared effects)
 
 Key components:
 - `internal/ais/types.go`: UIA/APA/APr/IBE/TCA types
@@ -113,15 +137,9 @@ Key components:
 ---
 
 ## Limitations
-- Alignment proof is placeholder (deterministic scores). Replace with a real verifier.
+- Alignment verifier is deterministic and heuristic (semantic‑entailment‑v1). It uses keyword
+  entailment and basic risk signals; replace or extend with a formal verifier as needed.
 - Audit is in-memory/SSE (no persistence).
-
----
-
-## Roadmap
-- Add VC/SD‑JWT based UIA/APr, signed JSONL audit, stepwise consent tokens
-- Add more tools (fs.read, vector store) with TCAs and data‑class membranes
-- Optional: bridge to Hexa/IDQL for provider policy push
 
 ---
 

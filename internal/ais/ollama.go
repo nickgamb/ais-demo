@@ -58,8 +58,9 @@ func (c *OllamaClient) EnsureModel() error {
         return fmt.Errorf("pull failed: %d: %s", resp.StatusCode, string(body))
     }
     // Consume streaming progress until EOF
+    // Consume NDJSON until EOF
     dec := json.NewDecoder(resp.Body)
-    for dec.More() {
+    for {
         var m map[string]any
         if err := dec.Decode(&m); err != nil { break }
     }
@@ -105,9 +106,9 @@ func (c *OllamaClient) PullStream(cb func(map[string]any) error) error {
         return fmt.Errorf("pull failed: %d: %s", resp.StatusCode, string(body))
     }
     dec := json.NewDecoder(resp.Body)
-    for dec.More() {
+    for {
         var m map[string]any
-        if err := dec.Decode(&m); err != nil { return err }
+        if err := dec.Decode(&m); err != nil { return nil }
         // compute percent if fields present
         if t, ok := m["total"].(float64); ok && t > 0 {
             if cpl, ok2 := m["completed"].(float64); ok2 {
