@@ -1,0 +1,37 @@
+# Helpful commands:
+# - Start:               docker compose up --build
+# - Stop:                docker compose down
+# - View logs:           docker compose logs -f aisdemo
+# - Open app:            http://localhost:8890
+# - Check Ollama:        curl -s http://localhost:11434/api/tags | jq
+# - Pull model (inside): docker exec -it ais-ollama ollama pull llama3
+# - Change model:        edit OLLAMA_MODEL env here or use UI model selector
+# - Rebuild only app:    docker compose build aisdemo && docker compose up -d aisdemo
+# - Clean volumes:       docker compose down -v   (if you had named volumes)
+
+version: "3.9"
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ais-ollama
+    ports:
+      - "11434:11434"
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+    volumes:
+      - ./internal/ollama-models:/root/.ollama
+
+  aisdemo:
+    build: .
+    container_name: ais-demo
+    depends_on:
+      - ollama
+    ports:
+      - "8890:8890"
+    environment:
+      - OLLAMA_URL=http://ollama:11434
+      - OLLAMA_MODEL=llama3
+      - AIS_SECRET=dev-secret-change-me
+
+
+
