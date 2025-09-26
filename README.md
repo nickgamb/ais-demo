@@ -6,8 +6,6 @@ This demo shows a minimal implementation of Agentic Intent Security (AIS):
 - Bind each tool/API call with an Intent‑Bound Envelope (IBE)
 - Enforce alignment and constraints before calling a local LLM (Ollama)
 
-The demo is self‑contained and does not require Hexa/IDQL. It runs as a small Go web server and calls an Ollama model to generate text.
-
 ### Features
 - Dark ChatGPT-like chat UI (intent side panel, model selector, agent steps editor)
 - UIA (intent), APA (plan), APr (alignment) preview; UIA editable in-place (CodeMirror)
