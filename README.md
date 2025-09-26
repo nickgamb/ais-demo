@@ -16,6 +16,14 @@ This demo shows a minimal implementation of Agentic Intent Security (AIS):
 - Configurable agentic chain (JSON). Includes `ollama.generate` and `http.get` tools
 - Live Audit panel (SSE) showing each enforced call (UIA/APA/APr refs, IBE id, tool)
 
+## Screenshots
+
+![Main chat UI](screenshots/main.png)
+
+![Model selection and status](screenshots/models.png)
+
+![Chat example with populated intent panels](screenshots/chatExample.png)
+
 ---
 
 ## Quickstart
@@ -39,7 +47,7 @@ The compose file starts two services:
 
 Environment variables (configured in `docker-compose.yml`):
 - `OLLAMA_URL` (default `http://ollama:11434`)
-- `OLLAMA_MODEL` (default `llama3`)
+- `OLLAMA_MODEL` (default `codellama:7b` in this repo)
 - `AIS_SECRET` (JWS HS256 key; demo default)
 
 To change the model, edit `OLLAMA_MODEL` and rebuild/restart.
@@ -59,7 +67,7 @@ go run ./cmd/aisdemo
 Optional environment variables:
 ```bash
 export OLLAMA_URL=http://localhost:11434
-export OLLAMA_MODEL=llama3
+export OLLAMA_MODEL=codellama:7b
 export AIS_SECRET=dev-secret-change-me
 ```
 
@@ -122,8 +130,14 @@ Key components:
 
 ## Configuration
 - `OLLAMA_URL`: base URL of the Ollama server (default `http://ollama:11434`)
-- `OLLAMA_MODEL`: model name to use (default `llama3`)
+- `OLLAMA_MODEL`: model name to use (default `codellama:7b`)
 - `AIS_SECRET`: symmetric key for JWS HS256 (demo default; change for any non‑local use)
+
+Model cache layout (bind‑mounted):
+- We mount `./internal/ollama-models` to `/root/.ollama` in the Ollama container.
+- Place blobs under `internal/ollama-models/models/blobs`.
+- Place manifests under `internal/ollama-models/models/manifests/...`.
+- Remove any `*-partial*` files to avoid pull retries.
 
 ---
 

@@ -29,3 +29,20 @@
 2. If divergence > threshold, require elevation or halt.
 
 
+### Appendix: Reference Endpoints (demo)
+
+HTTP (JSON unless noted)
+- `POST /api/chat/send` → { assistant, uia, apa, apr }
+  - Request: { messages:[{role,content}], uia:UIA, tool?:"http.get", url?:string }
+  - Behavior: Builds APA, computes APr (semantic‑entailment‑v1), mints IBE, calls guard, executes tool on success.
+- `POST /api/chat/plan` → { uia, apa, apr }
+  - Request: { uia:UIA }
+  - Behavior: Builds APA/APr only (no tool execution).
+- `GET /model/status` → { present:bool, model:string, error?:string }
+- `POST /model/pull` (NDJSON)
+  - Streamed objects may include { total, completed, percent }.
+- `GET /model/list` → { models:[string] }
+- `POST /model/select` → 204
+  - Request: { model:string }
+- `GET /audit/stream` (text/event-stream)
+  - Events: data: { ts, uia, apa, ibe, tca, tool, ok }

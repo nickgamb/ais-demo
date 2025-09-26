@@ -71,7 +71,7 @@ Note: Draft‑07 compatible; examples trimmed for brevity.
     "uia": {"type": "string", "format": "uri"},
     "apa": {"type": "string", "format": "uri"},
     "method": {"type": "string"},
-    "evidence": {"type": "object", "properties": {"scores": {"type": "object", "properties": {"coverage": {"type": "number"}, "risk": {"type": "number"}}}, "bounds": {"type": "object"}}},
+    "evidence": {"type": "object", "required": ["coverage", "risk"], "properties": {"coverage": {"type": "number", "minimum": 0, "maximum": 1}, "risk": {"type": "number", "minimum": 0, "maximum": 1}, "obligations": {"type": "array", "items": {"type": "string"}}}},
     "proof": {"type": "object"}
   }
 }

@@ -52,6 +52,17 @@ Semantics:
 - Coverage ≥ threshold AND risk ≤ budget required by local policy.
 - Supports zero‑knowledge or redacted proofs in future profiles.
 
+Audit profile (minimum interoperable event fields)
+- Append JSON lines with: `ts`, `uia`, `apa`, `ibe`, `tca`, `tool`, `ok`, `hashes?`, `redactions?`.
+- Privacy: store references and hashes, not raw prompts/outputs.
+- Stapling: tools SHOULD include last‑seen UIA/APA revocation status.
+
+Verifier profile: `semantic-entailment-v1` (non‑normative → can be normative via test vectors)
+- Inputs: UIA.purpose (string), APA (steps with args), optional policy profile.
+- Procedure: extract lowercase keywords (≥4 chars) from purpose; a step entails if its prompt/url contains any keyword; coverage = alignedSteps/totalSteps; risk baseline 0, +0.5 if predictedWrites>0, +0.3 if purpose suggests outbound actions (send/post/write/export/email/delete); clamp to [0,1].
+- Output: evidence.coverage, evidence.risk.
+- Tolerance: implementers MUST treat evidence equal within ±1e‑9 as matching recomputation.
+
 ### 5. TCA — Tool Capability Assertion
 Purpose: Formal contract of tool operations and side effects.
 
@@ -73,6 +84,8 @@ Required fields:
 Semantics:
 - Servers MUST verify signatures, freshness, and compatibility before execution.
 - Nonces MUST NOT be reused; expired IBEs MUST be rejected.
+- Audience/tool binding: servers SHOULD bind IBE to specific tool operation via `tcaRef` and `apaStepRef`.
+- Canonicalization: the `sig` MUST cover the envelope with `sig` field blanked; clock skew allowance ≤ 2 minutes.
 
 ### 7. SCA — Supply Chain Assertion
 Purpose: Provenance for models, guardrails, and policies.
