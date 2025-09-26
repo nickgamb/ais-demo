@@ -65,6 +65,7 @@ type StepAlignment struct {
 type APATotals struct {
     PredictedWrites  int `json:"predictedWrites"`
     PredictedRecords int `json:"predictedRecords"`
+    PredictedExternalCalls int `json:"predictedExternalCalls,omitempty"`
 }
 
 type APr struct {
@@ -98,6 +99,7 @@ type TCA struct {
     ID        string         `json:"id"`
     Operator  string         `json:"operator"`
     Operations []TCAOperation `json:"operations"`
+    Proof     map[string]any `json:"proof"`
 }
 type TCAOperation struct {
     Name    string           `json:"name"`
@@ -106,6 +108,14 @@ type TCAOperation struct {
 type OperationEffects struct {
     Writes      int      `json:"writes"`
     DataClasses []string `json:"dataClasses"`
+    Destinations []string `json:"destinations,omitempty"`
+}
+
+type ConsentToken struct {
+    UIARef  string    `json:"uiaRef"`
+    StepRef string    `json:"stepRef"`
+    Exp     time.Time `json:"exp"`
+    Sig     string    `json:"sig"`
 }
 
 

@@ -75,6 +75,14 @@ Open http://localhost:8890.
 
 ---
 
+## Deployments (GPU & Cache)
+- GPU: set `gpus: all` (Compose v2) or use the `deploy.resources.reservations.devices` GPU stanza.
+- Windows/WSL: enable WSL2 and GPU support in Docker Desktop.
+- Cache layout: bind `./internal/ollama-models` to `/root/.ollama`; place blobs under `models/blobs` and manifests under `models/manifests`; remove any `*-partial*` files.
+- Audit file: set `AIS_AUDIT_PATH` and `AIS_AUDIT_MAXLINES` for persistence.
+
+---
+
 ## How to Use
 - Chat: type a message; intent (UIA) and plan (APA/APr) appear in the Intent panel; tool calls are enforced via IBE.
 - Intent editor: tweak UIA JSON directly; use Re‑Plan to regenerate APA/APr before sending.

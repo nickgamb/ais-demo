@@ -16,4 +16,9 @@ go build ./cmd/aisconform
 # Run (uses spec/test-vectors by default)
 ./aisconform
 ```
-Expected: all PASS except the intentional FAIL vector is reported as mismatch.
+
+## Emit golden JWS examples
+```bash
+./aisconform --emit-golden
+# writes golden_*_signed.json with canonical JSON + HS256 JWS using demo secret
+```

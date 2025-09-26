@@ -4,20 +4,74 @@ import (
     "errors"
     "slices"
     "strings"
+    "sync"
     "time"
 )
 
-type GuardConfig struct { Secret []byte; MinAlignment float64 }
+type GuardConfig struct { Secret []byte; MinAlignment float64; VerifierMethod string }
+
+var (
+    nonceSeen = struct{ sync.Mutex; m map[string]time.Time }{m: map[string]time.Time{}}
+    crl = struct{
+        sync.RWMutex
+        issued time.Time
+        expires time.Time
+        revoked map[string]string // id -> reason
+    }{revoked: map[string]string{}}
+)
+
+// SetCRL updates an in-memory CRL used by VerifyIBE.
+func SetCRL(issued, expires time.Time, ids map[string]string) {
+    crl.Lock()
+    crl.issued, crl.expires = issued, expires
+    crl.revoked = map[string]string{}
+    for k, v := range ids { crl.revoked[k] = v }
+    crl.Unlock()
+}
+
+func isRevoked(id string, now time.Time) bool {
+    crl.RLock()
+    defer crl.RUnlock()
+    if crl.expires.IsZero() || now.After(crl.expires) { return false }
+    _, ok := crl.revoked[id]
+    return ok
+}
 
 func VerifyIBE(cfg GuardConfig, ibe IBE, apr APr, uia UIA, apa APA, tca TCA) error {
-    if time.Now().After(ibe.Exp) { return errors.New("IBE-EXPIRED") }
+    now := time.Now()
+    if now.After(ibe.Exp) { return errors.New("IBE-EXPIRED") }
+    // simple replay cache by nonce
+    nonceSeen.Lock()
+    if t, ok := nonceSeen.m[ibe.Nonce]; ok && now.Sub(t) < 10*time.Minute { nonceSeen.Unlock(); return errors.New("IBE-REPLAY") }
+    nonceSeen.m[ibe.Nonce] = now
+    nonceSeen.Unlock()
     // Verify signature over the envelope WITHOUT the Sig field
     ibeForSig := ibe
     ibeForSig.Sig = ""
     ok, err := VerifyJWSObject(cfg.Secret, ibeForSig, ibe.Sig)
     if err != nil || !ok { return errors.New("IBE-SIG-INVALID") }
-    // Verify APr deterministically based on simple semantic entailment heuristic
-    cov, risk := VerifyAlignment(uia, apa)
+    // Verify UIA/APA/APr signatures if present
+    if sig, _ := uia.Proof["jws"].(string); sig != "" {
+        uiaForSig := uia; uiaForSig.Proof = map[string]any{}
+        if ok, _ := VerifyJWSObject(cfg.Secret, uiaForSig, sig); !ok { return errors.New("UIA-SIG-INVALID") }
+    }
+    if sig, _ := apa.Proof["jws"].(string); sig != "" {
+        apaForSig := apa; apaForSig.Proof = map[string]any{}
+        if ok, _ := VerifyJWSObject(cfg.Secret, apaForSig, sig); !ok { return errors.New("APA-SIG-INVALID") }
+    }
+    if sig, _ := apr.Proof["jws"].(string); sig != "" {
+        aprForSig := apr; aprForSig.Proof = map[string]any{}
+        if ok, _ := VerifyJWSObject(cfg.Secret, aprForSig, sig); !ok { return errors.New("APR-SIG-INVALID") }
+    }
+    var cov, risk float64
+    switch cfg.VerifierMethod {
+    case "external-policy-v1":
+        cov, risk = VerifyAlignmentExternalPolicy(uia, apa, ExternalPolicy{Keywords: extractKeywords(strings.ToLower(uia.Purpose)), WriteRisk: 0.5})
+    case "classifier-v1":
+        cov, risk = VerifyAlignmentClassifier(uia, apa)
+    default:
+        cov, risk = VerifyAlignment(uia, apa)
+    }
     if apr.Method == "semantic-entailment-v1" {
         // Require that evidence matches recomputed values within tolerance
         if abs(apr.Evidence.Coverage-cov) > 1e-9 || abs(apr.Evidence.Risk-risk) > 1e-9 {
@@ -25,15 +79,42 @@ func VerifyIBE(cfg GuardConfig, ibe IBE, apr APr, uia UIA, apa APA, tca TCA) err
         }
     }
     if cov < cfg.MinAlignment { return errors.New("ALIGN-BELOW-THRESHOLD") }
-	if apa.Totals.PredictedWrites > uia.RiskBudget.MaxWrites { return errors.New("risk budget exceeded: writes") }
+    // Revocation checks
+    if isRevoked(uia.ID, now) { return errors.New("UIA-REVOKED") }
+    if isRevoked(apa.ID, now) { return errors.New("APA-REVOKED") }
+    // Risk budgets: writes, records, external calls
+    if apa.Totals.PredictedWrites > uia.RiskBudget.MaxWrites { return errors.New("RISK-WRITES-EXCEEDED") }
+    if apa.Totals.PredictedRecords > uia.RiskBudget.MaxRecords { return errors.New("RISK-RECORDS-EXCEEDED") }
 	var step *APAStep
 	for i := range apa.Steps { if apa.Steps[i].ID == ibe.APAStepRef { step = &apa.Steps[i]; break } }
     if step == nil { return errors.New("IBE-STEP-NOT-FOUND") }
     for _, dc := range step.Expected.DataClasses { if !slices.Contains(uia.Constraints.DataClasses, dc) { return errors.New("DATA-CLASS-NOT-PERMITTED") } }
-	var op *TCAOperation
+    var op *TCAOperation
 	for i := range tca.Operations { if tca.Operations[i].Name == step.Tool { op = &tca.Operations[i]; break } }
     if op == nil { return errors.New("TCA-OP-NOT-ALLOWED") }
+    // Verify TCA operator proof if present
+    if sig, _ := tca.Proof["jws"].(string); sig != "" {
+        t := tca
+        t.Proof = map[string]any{}
+        if ok, _ := VerifyJWSObject(cfg.Secret, t, sig); !ok { return errors.New("TCA-SIG-INVALID") }
+    }
     if step.Expected.Writes > op.Effects.Writes { return errors.New("TCA-EFFECTS-EXCEEDED") }
+    // Optional destination membrane check
+    if len(op.Effects.Destinations) > 0 {
+        // naive destination extraction from url arg
+        if u, ok := step.Args["url"].(string); ok {
+            allowed := false
+            for _, d := range op.Effects.Destinations { if strings.Contains(u, d) { allowed = true; break } }
+            if !allowed { return errors.New("DESTINATION-NOT-ALLOWED") }
+        }
+    }
+    // Basic arg validation by tool name (placeholder for JSON Schema)
+    if step.Tool == "http.get" {
+        if u, ok := step.Args["url"].(string); !ok || !(strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://")) { return errors.New("INPUT-SCHEMA-INVALID") }
+    }
+    if step.Tool == "ollama.generate" {
+        if p, ok := step.Args["prompt"].(string); !ok || len(p) == 0 { return errors.New("INPUT-SCHEMA-INVALID") }
+    }
 	return nil
 }
 

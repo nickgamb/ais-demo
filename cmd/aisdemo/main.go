@@ -2,8 +2,11 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"context"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"html/template"
 	"io"
 	"log"
@@ -13,16 +16,30 @@ import (
 	"time"
 
 	"ais-demo/internal/ais"
+    "go.opentelemetry.io/otel"
+    "go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
+    "go.opentelemetry.io/otel/sdk/resource"
+    sdktrace "go.opentelemetry.io/otel/sdk/trace"
+    semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
 var secret []byte
 var auditLog []string
 var auditNotify = make(chan struct{}, 1)
+var auditPath string
+var auditMaxLines = 1000
 
 func main() {
+    // Minimal OTel tracer provider (stdout)
+    if tp, err := initTracer(); err == nil { defer func(){ _ = tp.Shutdown(context.Background()) }() }
 	secret = []byte(os.Getenv("AIS_SECRET"))
 	if len(secret) == 0 {
 		secret = []byte("dev-secret-change-me")
+	}
+
+	auditPath = envDefault("AIS_AUDIT_PATH", "audit.log")
+	if v := os.Getenv("AIS_AUDIT_MAXLINES"); v != "" {
+		_, _ = fmt.Sscanf(v, "%d", &auditMaxLines)
 	}
 
     // Model status endpoints and UI
@@ -38,6 +55,8 @@ func main() {
 	http.HandleFunc("/execute", handleExecute)
     http.HandleFunc("/api/chat/send", handleChatSend)
     http.HandleFunc("/api/chat/plan", handlePlan)
+    http.HandleFunc("/api/consent/mint", handleConsentMint)
+    http.HandleFunc("/api/chat/crosscheck", handleCrossCheck)
 
 	log.Println("AIS demo on http://localhost:8890")
 	log.Fatal(http.ListenAndServe(":8890", nil))
@@ -164,6 +183,8 @@ body{margin:0;background:#0f1115;color:#e6e6e6;font-family:Inter,system-ui,Arial
 .bigprogress{width:420px;height:10px;border:1px solid #2a2f3a;border-radius:8px}
 .bigbar{height:100%;background:#4caf50;width:0%;border-radius:8px}
 .disabled{opacity:.6;pointer-events:none;filter:grayscale(20%)}
+.spinner{display:inline-block;width:12px;height:12px;border:2px solid #9aa4b2;border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite;margin-right:6px}
+@keyframes spin{to{transform:rotate(360deg)}}
 </style>
 </head>
 <body>
@@ -174,6 +195,7 @@ body{margin:0;background:#0f1115;color:#e6e6e6;font-family:Inter,system-ui,Arial
     <span class="pill">AIS Demo</span>
     <select id="modelSel" class="iconbtn" style="margin-left:auto"></select>
     <button id="auditToggle" class="iconbtn">Audit</button>
+    <span id="busy" class="status" style="display:none"><span class="spinner"></span>Working…</span>
   </div>
   <div class="main">
     <div class="sidebar" id="intentPanel">
@@ -398,6 +420,10 @@ async function send(){
   const text = ta.value.trim();
   if(!text) return;
   if(document.getElementById('loadingOverlay').style.display==='flex'){ return }
+  const busy = document.getElementById('busy');
+  const sendBtn = document.getElementById('send');
+  busy.style.display='inline-flex';
+  sendBtn.disabled = true; document.querySelector('.composer').classList.add('disabled');
   addMsg('user', text);
   ta.value = '';
 
@@ -412,11 +438,16 @@ async function send(){
   }
 
   const body = { messages: msgs, uia: currentIntent };
-  const r = await fetch('/api/chat/send', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body)});
-  if(!r.ok){ addMsg('assistant', 'Error: '+await r.text()); return }
-  const j = await r.json();
-  showIntent(j.uia, j.apa, j.apr);
-  addMsg('assistant', j.assistant);
+  try{
+    const r = await fetch('/api/chat/send', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body)});
+    if(!r.ok){ addMsg('assistant', 'Error: '+await r.text()); return }
+    const j = await r.json();
+    showIntent(j.uia, j.apa, j.apr);
+    addMsg('assistant', j.assistant);
+  } finally {
+    busy.style.display='none';
+    sendBtn.disabled = false; document.querySelector('.composer').classList.remove('disabled');
+  }
 }
 
 async function runAgent(){
@@ -522,7 +553,7 @@ func handleConfirm(w http.ResponseWriter, r *http.Request) {
 			Expected: ais.StepExpected{DataClasses: []string{"derived"}, Writes: 0},
 			Alignment: ais.StepAlignment{Score: 0.0, Why: "semantic entailment"},
 		}},
-		Totals: ais.APATotals{PredictedWrites: 0, PredictedRecords: 1},
+		Totals: ais.APATotals{PredictedWrites: 0, PredictedRecords: 1, PredictedExternalCalls: 0},
 		Proof: map[string]any{},
 	}
 	// Compute deterministic alignment evidence and reflect it in APr and step alignment
@@ -530,6 +561,8 @@ func handleConfirm(w http.ResponseWriter, r *http.Request) {
 	apa.Steps[0].Alignment.Score = cov
 	apr := ais.APr{Type: "APr", ID: nowID(), UIA: uia.ID, APA: apa.ID, Method: "semantic-entailment-v1", Evidence: ais.APrEvidence{Coverage: cov, Risk: risk}, Proof: map[string]any{}}
 
+	// Sign UIA
+	if j, err := ais.SignJWSObject(secret, uia); err == nil { if uia.Proof == nil { uia.Proof = map[string]any{} }; uia.Proof["jws"] = j }
 	uiaJSON, _ := json.MarshalIndent(uia, "", "  ")
 	apaJSON, _ := json.MarshalIndent(apa, "", "  ")
 	aprJSON, _ := json.Marshal(apr)
@@ -546,7 +579,7 @@ func handleConfirm(w http.ResponseWriter, r *http.Request) {
 
 func handleExecute(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "post only", 405)
+        writeJSONError(w, 405, "INPUT-METHOD-NOT-ALLOWED", "post only", nil)
 		return
 	}
 	var uia ais.UIA
@@ -565,15 +598,15 @@ func handleExecute(w http.ResponseWriter, r *http.Request) {
     sig, _ := ais.SignJWSObject(secret, ibeForSig)
     ibe.Sig = sig
 
-	if err := ais.VerifyIBE(ais.GuardConfig{Secret: secret, MinAlignment: 0.8}, ibe, apr, uia, apa, tca); err != nil {
-		http.Error(w, "blocked by guard: "+err.Error(), 403)
+    if err := ais.VerifyIBE(ais.GuardConfig{Secret: secret, MinAlignment: 0.8, VerifierMethod: "semantic-entailment-v1"}, ibe, apr, uia, apa, tca); err != nil {
+        writeJSONError(w, 403, err.Error(), "blocked by guard", map[string]any{"ibe": ibe.ID})
 		return
 	}
 
 	client := &ais.OllamaClient{BaseURL: envDefault("OLLAMA_URL", "http://localhost:11434"), Model: envDefault("OLLAMA_MODEL", "llama3"), HTTP: http.DefaultClient}
     // If model is still missing (e.g., first-time), trigger pull via UI route
     if ok, _ := client.HasModel(); !ok {
-        http.Error(w, "model not present yet; please wait for pull to complete", 409)
+        writeJSONError(w, 409, "MODEL-NOT-PRESENT", "model not present yet; please wait for pull to complete", nil)
         return
     }
 	resp, err := client.Generate(prompt)
@@ -582,10 +615,7 @@ func handleExecute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
     // audit event for legacy execute path
-    ev := map[string]any{"ts": time.Now().UTC().Format(time.RFC3339), "uia": uia.ID, "apa": apa.ID, "ibe": ibe.ID, "tool": "ollama.generate", "ok": true}
-    b, _ := json.Marshal(ev)
-    auditLog = append(auditLog, string(b))
-    select { case auditNotify <- struct{}{}: default: }
+    writeAudit(map[string]any{"ts": time.Now().UTC().Format(time.RFC3339), "uia": uia.ID, "apa": apa.ID, "ibe": ibe.ID, "tool": "ollama.generate", "ok": true, "resultHash": hashText(resp)})
 	w.Header().Set("content-type", "text/plain")
 	_, _ = w.Write([]byte(resp))
 }
@@ -622,6 +652,13 @@ func envDefault(k, v string) string {
 	return v
 }
 
+type errBody struct{ Code, Message string; Details map[string]any }
+func writeJSONError(w http.ResponseWriter, status int, code, msg string, details map[string]any) {
+    w.Header().Set("content-type", "application/json")
+    w.WriteHeader(status)
+    _ = json.NewEncoder(w).Encode(errBody{Code: code, Message: msg, Details: details})
+}
+
 func contains(slice []string, item string) bool {
     for _, s := range slice {
         if s == item { return true }
@@ -647,6 +684,9 @@ type chatResp struct {
 }
 
 func handleChatSend(w http.ResponseWriter, r *http.Request) {
+    tracer := otel.Tracer("aisdemo")
+    ctx, span := tracer.Start(r.Context(), "api.chat.send")
+    defer span.End()
 	var req chatReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad request", 400)
@@ -671,7 +711,7 @@ func handleChatSend(w http.ResponseWriter, r *http.Request) {
     if req.Tool == "http.get" {
         step = ais.APAStep{ID: "s1", Tool: "http.get", Args: map[string]any{"url": req.URL}, Expected: ais.StepExpected{DataClasses: []string{"derived"}, Writes: 0}, Alignment: ais.StepAlignment{Score: 0.0, Why: "semantic entailment"}}
     }
-    apa := ais.APA{Type: "APA", ID: nowID(), UIA: req.UIA.ID, Model: ais.ModelInfo{Hash: "ollama-local"}, Steps: []ais.APAStep{step}, Totals: ais.APATotals{PredictedWrites: 0, PredictedRecords: 1}, Proof: map[string]any{}}
+    apa := ais.APA{Type: "APA", ID: nowID(), UIA: req.UIA.ID, Model: ais.ModelInfo{Hash: "ollama-local"}, Steps: []ais.APAStep{step}, Totals: ais.APATotals{PredictedWrites: 0, PredictedRecords: 1, PredictedExternalCalls: 0}, Proof: map[string]any{}}
     cov, risk := ais.VerifyAlignment(req.UIA, apa)
     apa.Steps[0].Alignment.Score = cov
 	apr := ais.APr{Type: "APr", ID: nowID(), UIA: req.UIA.ID, APA: apa.ID, Method: "semantic-entailment-v1", Evidence: ais.APrEvidence{Coverage: cov, Risk: risk}, Proof: map[string]any{}}
@@ -686,10 +726,10 @@ func handleChatSend(w http.ResponseWriter, r *http.Request) {
     sig, _ := ais.SignJWSObject(secret, ibeForSig)
 	ibe.Sig = sig
 
-	if err := ais.VerifyIBE(ais.GuardConfig{Secret: secret, MinAlignment: 0.8}, ibe, apr, req.UIA, apa, tca); err != nil {
-		http.Error(w, "blocked by guard: "+err.Error(), 403)
-		return
-	}
+    if err := ais.VerifyIBE(ais.GuardConfig{Secret: secret, MinAlignment: 0.8, VerifierMethod: "semantic-entailment-v1"}, ibe, apr, req.UIA, apa, tca); err != nil {
+        writeJSONError(w, 403, err.Error(), "blocked by guard", map[string]any{"ibe": ibe.ID})
+        return
+    }
     var respText string
     var err error
     if req.Tool == "http.get" {
@@ -698,20 +738,19 @@ func handleChatSend(w http.ResponseWriter, r *http.Request) {
     } else {
         client := &ais.OllamaClient{BaseURL: envDefault("OLLAMA_URL", "http://localhost:11434"), Model: envDefault("OLLAMA_MODEL", "llama3"), HTTP: http.DefaultClient}
         if ok, _ := client.HasModel(); !ok {
-            http.Error(w, "model not present yet; please wait for pull to complete", 409)
+            writeJSONError(w, 409, "MODEL-NOT-PRESENT", "model not present yet; please wait for pull to complete", nil)
             return
         }
+        _, child := tracer.Start(ctx, "ollama.generate")
         respText, err = client.Generate(prompt)
+        child.End()
     }
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-    // audit event
-    ev := map[string]any{"ts": time.Now().UTC().Format(time.RFC3339), "uia": req.UIA.ID, "apa": apa.ID, "ibe": ibe.ID, "tool": step.Tool, "ok": true}
-    b, _ := json.Marshal(ev)
-    auditLog = append(auditLog, string(b))
-    select { case auditNotify <- struct{}{}: default: }
+    if err != nil {
+        writeJSONError(w, 500, "SYS-RETRY", err.Error(), nil)
+        return
+    }
+    // audit event (hash-friendly minimal fields)
+    writeAudit(map[string]any{"ts": time.Now().UTC().Format(time.RFC3339), "uia": req.UIA.ID, "apa": apa.ID, "ibe": ibe.ID, "tool": step.Tool, "ok": true, "resultHash": hashText(respText)})
 	w.Header().Set("content-type", "application/json")
 	_ = json.NewEncoder(w).Encode(chatResp{Assistant: respText, UIA: req.UIA, APA: apa, APr: apr})
 }
@@ -719,17 +758,40 @@ func handleChatSend(w http.ResponseWriter, r *http.Request) {
 func handlePlan(w http.ResponseWriter, r *http.Request) {
     var req struct{ UIA ais.UIA `json:"uia"` }
     if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-        http.Error(w, "bad request", 400)
+        writeJSONError(w, 400, "INPUT-BAD-JSON", "bad request", nil)
         return
     }
     // Build a plan (APA/APr) without executing tools
     step := ais.APAStep{ID: "s1", Tool: "ollama.generate", Args: map[string]any{"prompt": "planned"}, Expected: ais.StepExpected{DataClasses: []string{"derived"}, Writes: 0}, Alignment: ais.StepAlignment{Score: 0.0, Why: "semantic entailment"}}
-    apa := ais.APA{Type: "APA", ID: nowID(), UIA: req.UIA.ID, Model: ais.ModelInfo{Hash: "ollama-local"}, Steps: []ais.APAStep{step}, Totals: ais.APATotals{PredictedWrites: 0, PredictedRecords: 1}, Proof: map[string]any{}}
+    apa := ais.APA{Type: "APA", ID: nowID(), UIA: req.UIA.ID, Model: ais.ModelInfo{Hash: "ollama-local"}, Steps: []ais.APAStep{step}, Totals: ais.APATotals{PredictedWrites: 0, PredictedRecords: 1, PredictedExternalCalls: 0}, Proof: map[string]any{}}
     cov, risk := ais.VerifyAlignment(req.UIA, apa)
     apa.Steps[0].Alignment.Score = cov
     apr := ais.APr{Type: "APr", ID: nowID(), UIA: req.UIA.ID, APA: apa.ID, Method: "semantic-entailment-v1", Evidence: ais.APrEvidence{Coverage: cov, Risk: risk}, Proof: map[string]any{}}
+    // Sign APA/APr (demo symmetric key)
+    if j, err := ais.SignJWSObject(secret, apa); err == nil { if apa.Proof == nil { apa.Proof = map[string]any{} }; apa.Proof["jws"] = j }
+    if j, err := ais.SignJWSObject(secret, apr); err == nil { if apr.Proof == nil { apr.Proof = map[string]any{} }; apr.Proof["jws"] = j }
     w.Header().Set("content-type", "application/json")
     _ = json.NewEncoder(w).Encode(map[string]any{"uia": req.UIA, "apa": apa, "apr": apr})
+}
+
+// handleCrossCheck recomputes an alternative APA and compares deltas
+func handleCrossCheck(w http.ResponseWriter, r *http.Request) {
+    var req struct{ UIA ais.UIA `json:"uia"`; APA ais.APA `json:"apa"` }
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil { writeJSONError(w, 400, "INPUT-BAD-JSON", "bad request", nil); return }
+    // naive alternative: same tool, shorter prompt
+    alt := req.APA
+    if len(alt.Steps) > 0 {
+        if p, ok := alt.Steps[0].Args["prompt"].(string); ok && len(p) > 80 { alt.Steps[0].Args["prompt"] = p[:80] }
+    }
+    // divergence metric: edit distance proxy via length delta on first step prompt
+    var delta float64
+    if len(req.APA.Steps) > 0 {
+        a := ""; if v, ok := req.APA.Steps[0].Args["prompt"].(string); ok { a = v }
+        b := ""; if v, ok := alt.Steps[0].Args["prompt"].(string); ok { b = v }
+        if len(a) > 0 { if len(a) > len(b) { delta = float64(len(a)-len(b))/float64(len(a)) } else { delta = float64(len(b)-len(a))/float64(len(a)) } }
+    }
+    w.Header().Set("content-type", "application/json")
+    _ = json.NewEncoder(w).Encode(map[string]any{"alt": alt, "divergence": delta})
 }
 
 
@@ -755,7 +817,7 @@ func handleModelPull(w http.ResponseWriter, r *http.Request) {
         return nil
     })
     if err != nil {
-        _, _ = io.WriteString(w, `{"error":"`+template.HTMLEscapeString(err.Error())+`"}\n`)
+        _, _ = io.WriteString(w, `{"code":"SYS-RETRY","message":"`+template.HTMLEscapeString(err.Error())+`"}`+"\n")
         if flusher != nil { flusher.Flush() }
     }
 }
@@ -764,7 +826,7 @@ func handleModelList(w http.ResponseWriter, r *http.Request) {
     c := &ais.OllamaClient{BaseURL: envDefault("OLLAMA_URL", "http://localhost:11434"), Model: envDefault("OLLAMA_MODEL", "llama3"), HTTP: http.DefaultClient}
     models, err := c.ListModels()
     if err != nil {
-        http.Error(w, err.Error(), 500)
+        writeJSONError(w, 500, "SYS-RETRY", err.Error(), nil)
         return
     }
     w.Header().Set("content-type", "application/json")
@@ -774,7 +836,7 @@ func handleModelList(w http.ResponseWriter, r *http.Request) {
 func handleModelSelect(w http.ResponseWriter, r *http.Request) {
     var p struct{ Model string `json:"model"` }
     if err := json.NewDecoder(r.Body).Decode(&p); err != nil || p.Model == "" {
-        http.Error(w, "bad request", 400)
+        writeJSONError(w, 400, "INPUT-BAD-JSON", "bad request", nil)
         return
     }
     // Persist selection via env for this process (demo); in real app store in session
@@ -788,9 +850,7 @@ func handleAuditStream(w http.ResponseWriter, r *http.Request) {
     flusher, _ := w.(http.Flusher)
 
     // send existing entries
-    for _, line := range auditLog {
-        _, _ = io.WriteString(w, "data: "+line+"\n\n")
-    }
+    for _, line := range auditLog { _, _ = io.WriteString(w, "data: "+line+"\n\n") }
     if flusher != nil { flusher.Flush() }
 
     notify := auditNotify
@@ -801,6 +861,46 @@ func handleAuditStream(w http.ResponseWriter, r *http.Request) {
         _, _ = io.WriteString(w, "data: "+last+"\n\n")
         if flusher != nil { flusher.Flush() }
     }
+}
+
+func writeAudit(ev map[string]any) {
+    b, _ := json.Marshal(ev)
+    line := string(b)
+    // append in memory
+    auditLog = append(auditLog, line)
+    if len(auditLog) > auditMaxLines { auditLog = auditLog[len(auditLog)-auditMaxLines:] }
+    select { case auditNotify <- struct{}{}: default: }
+    // append to file
+    f, err := os.OpenFile(auditPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+    if err == nil { _, _ = f.Write(append(b, '\n')); _ = f.Close() }
+}
+
+func hashText(s string) string {
+    h := sha256.Sum256([]byte(s))
+    return hex.EncodeToString(h[:])
+}
+
+// initTracer sets up a stdout tracer for demo purposes
+func initTracer() (*sdktrace.TracerProvider, error) {
+    exp, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
+    if err != nil { return nil, err }
+    tp := sdktrace.NewTracerProvider(
+        sdktrace.WithBatcher(exp),
+        sdktrace.WithResource(resource.NewWithAttributes(semconv.SchemaURL, semconv.ServiceName("ais-demo"))),
+    )
+    otel.SetTracerProvider(tp)
+    return tp, nil
+}
+func handleConsentMint(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodPost { writeJSONError(w, 405, "INPUT-METHOD-NOT-ALLOWED", "post only", nil); return }
+    var p struct{ UIA string `json:"uia"`; Step string `json:"step"`; Minutes int `json:"minutes"` }
+    if err := json.NewDecoder(r.Body).Decode(&p); err != nil || p.UIA=="" || p.Step=="" { writeJSONError(w, 400, "INPUT-BAD-JSON", "bad request", nil); return }
+    tok := ais.ConsentToken{UIARef: p.UIA, StepRef: p.Step, Exp: time.Now().Add(5*time.Minute)}
+    if p.Minutes > 0 { tok.Exp = time.Now().Add(time.Duration(p.Minutes) * time.Minute) }
+    t := tok; t.Sig = ""
+    if sig, err := ais.SignJWSObject(secret, t); err == nil { tok.Sig = sig }
+    w.Header().Set("content-type", "application/json")
+    _ = json.NewEncoder(w).Encode(tok)
 }
 
 

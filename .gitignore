@@ -26,3 +26,4 @@ go.work.sum
 
 # ollama models
 internal/ollama-models
+screenshots/Recording*.mp4
