@@ -185,6 +185,7 @@ body{margin:0;background:#0f1115;color:#e6e6e6;font-family:Inter,system-ui,Arial
 .disabled{opacity:.6;pointer-events:none;filter:grayscale(20%)}
 .spinner{display:inline-block;width:12px;height:12px;border:2px solid #9aa4b2;border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite;margin-right:6px}
 @keyframes spin{to{transform:rotate(360deg)}}
+.spinnerbig{display:inline-block;width:32px;height:32px;border:3px solid #9aa4b2;border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite;margin-right:10px}
 </style>
 </head>
 <body>
@@ -195,7 +196,6 @@ body{margin:0;background:#0f1115;color:#e6e6e6;font-family:Inter,system-ui,Arial
     <span class="pill">AIS Demo</span>
     <select id="modelSel" class="iconbtn" style="margin-left:auto"></select>
     <button id="auditToggle" class="iconbtn">Audit</button>
-    <span id="busy" class="status" style="display:none"><span class="spinner"></span>Working…</span>
   </div>
   <div class="main">
     <div class="sidebar" id="intentPanel">
@@ -229,6 +229,12 @@ body{margin:0;background:#0f1115;color:#e6e6e6;font-family:Inter,system-ui,Arial
     <h3 style="margin:0">Preparing model…</h3>
     <div class="bigprogress"><div class="bigbar" id="bigbar"></div></div>
     <div class="status" id="loadText">Downloading model…</div>
+  </div>
+</div>
+<div class="overlay" id="workingOverlay" style="display:none">
+  <div class="loadcard" style="align-items:center;gap:10px">
+    <div class="spinnerbig"></div>
+    <div>Working…</div>
   </div>
 </div>
 <div class="modal" id="confirmModal">
@@ -420,9 +426,11 @@ async function send(){
   const text = ta.value.trim();
   if(!text) return;
   if(document.getElementById('loadingOverlay').style.display==='flex'){ return }
-  const busy = document.getElementById('busy');
+  const busy = { style: { set display(_){} } };
+  const working = document.getElementById('workingOverlay');
   const sendBtn = document.getElementById('send');
   busy.style.display='inline-flex';
+  working.style.display='flex';
   sendBtn.disabled = true; document.querySelector('.composer').classList.add('disabled');
   addMsg('user', text);
   ta.value = '';
@@ -445,7 +453,8 @@ async function send(){
     showIntent(j.uia, j.apa, j.apr);
     addMsg('assistant', j.assistant);
   } finally {
-    busy.style.display='none';
+    // overlay already hides below
+    working.style.display='none';
     sendBtn.disabled = false; document.querySelector('.composer').classList.remove('disabled');
   }
 }
