@@ -1,0 +1,17 @@
+# Exclude large model caches and dev artifacts
+internal/ollama-models/
+**/*.bin
+**/*.gguf
+**/*.ggml
+**/*.pt
+**/*.safetensors
+
+# Node or frontend caches (none here but keep generic)
+node_modules/
+
+# VCS, editor, OS junk
+.git/
+.gitignore
+.gitattributes
+**/.DS_Store
+**/Thumbs.db

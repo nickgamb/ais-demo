@@ -4,7 +4,9 @@ FROM golang:1.23 AS builder
 WORKDIR /app
 COPY go.mod ./
 RUN go mod download
-COPY . ./
+# Copy only source code needed to build; exclude model caches
+COPY internal/ais ./internal/ais
+COPY cmd ./cmd
 ENV CGO_ENABLED=0 GOOS=linux
 RUN go build -o /out/aisdemo ./cmd/aisdemo
 

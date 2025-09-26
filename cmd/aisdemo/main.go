@@ -143,8 +143,8 @@ body{margin:0;background:#0f1115;color:#e6e6e6;font-family:Inter,system-ui,Arial
 .main{flex:1;display:flex}
 .sidebar{width:320px;border-right:1px solid #1b1f27;padding:16px;display:none}
 .sidebar h3{margin:0 0 8px 0;font-size:14px;color:#9aa4b2}
-.sidebar .codebox{background:#0b0d11;border:1px solid #1b1f27;border-radius:8px;max-height:40vh;overflow:hidden}
-.CodeMirror{height:160px}
+.sidebar .codebox{background:#0b0d11;border:1px solid #1b1f27;border-radius:8px;max-height:40vh;overflow:auto}
+.CodeMirror{height:160px; resize:vertical; overflow:auto}
 .chat{flex:1;display:flex;flex-direction:column}
 .messages{flex:1;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:12px}
 .msg{max-width:70%;padding:12px 14px;border-radius:12px;line-height:1.4}
@@ -227,19 +227,34 @@ let intentConfirmed = false;
 let currentIntent = null;
 let uiaEd, apaEd, aprEd, stepsEd;
 let auditEd;
+let currentModelName = null;
 
 async function refreshModelList(){
   try{
     const r = await fetch('/model/list');
     const j = await r.json();
     const sel = document.getElementById('modelSel');
+    const prev = currentModelName || sel.value;
     sel.innerHTML = '';
     (j.models||[]).forEach(name => {
       const opt = document.createElement('option'); opt.value = name; opt.textContent = name; sel.appendChild(opt);
     });
+    if(prev && [...sel.options].some(o=>o.value===prev)){
+      sel.value = prev;
+    } else {
+      try {
+        const st = await fetch('/model/status');
+        const sj = await st.json();
+        if(sj.model && [...sel.options].some(o=>o.value===sj.model)){
+          sel.value = sj.model;
+          currentModelName = sj.model;
+        }
+      } catch(_){ }
+    }
     sel.onchange = async ()=>{
       const chosen = sel.value;
       await fetch('/model/select', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({model: chosen})});
+      currentModelName = chosen;
       checkModel();
     };
   }catch(_){ }
@@ -278,6 +293,8 @@ function showIntent(uia, apa, apr){
     if(typeof apr === 'string'){ aprEd.setValue(apr); }
     else { aprEd.setValue(apr ? JSON.stringify(apr, null, 2) : ''); }
   }
+  // Ensure editors repaint even if updated while hidden
+  setTimeout(()=>{ try{ uiaEd && uiaEd.refresh(); apaEd && apaEd.refresh(); aprEd && aprEd.refresh(); }catch(_){} }, 0);
 }
 
 function setUIEnabled(on){
@@ -303,11 +320,34 @@ async function checkModel(){
   const overlay = document.getElementById('loadingOverlay');
   const bigbar = document.getElementById('bigbar');
   await refreshModelList();
+  // Prefer any already-present model before checking status to avoid unnecessary pulls
+  const selPre = document.getElementById('modelSel');
+  if(selPre && selPre.options.length > 0){
+    if(!currentModelName){ selPre.value = selPre.value || selPre.options[0].value; currentModelName = selPre.value }
+    try {
+      await fetch('/model/select', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({model: currentModelName})});
+    } catch(_){ }
+  }
   setUIEnabled(false);
   try{
     const r = await fetch('/model/status');
     const j = await r.json();
-    if(j.present){ s.textContent = 'Model ready: '+j.model; overlay.style.display='none'; setUIEnabled(true); return }
+    if(j.present){
+      s.textContent = 'Model ready: '+j.model; overlay.style.display='none'; setUIEnabled(true);
+      currentModelName = j.model;
+      const sel = document.getElementById('modelSel');
+      if(sel && [...sel.options].some(o=>o.value===j.model)) { sel.value = j.model }
+      return
+    }
+    // If any model is already present, select it instead of pulling default
+    const sel = document.getElementById('modelSel');
+    if(sel && sel.options.length > 0){
+      const chosen = sel.value || sel.options[0].value;
+      await fetch('/model/select', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({model: chosen})});
+      const r2 = await fetch('/model/status');
+      const j2 = await r2.json();
+      if(j2.present){ s.textContent = 'Model ready: '+j2.model; overlay.style.display='none'; setUIEnabled(true); return }
+    }
     overlay.style.display='flex'; s.textContent = 'Model downloading…';
     const resp = await fetch('/model/pull');
     const reader = resp.body.getReader();
@@ -319,7 +359,13 @@ async function checkModel(){
       let idx; while((idx=buf.indexOf('\n'))>=0){
         const line = buf.slice(0,idx).trim(); buf = buf.slice(idx+1);
         if(!line) continue;
-        try{ const o = JSON.parse(line); if(o.percent){ bigbar.style.width = o.percent+'%'; } }catch(e){}
+        try{
+          const o = JSON.parse(line);
+          if(o.percent !== undefined){
+            const p = Math.max(0, Math.min(95, Number(o.percent)));
+            bigbar.style.width = p+'%';
+          }
+        }catch(e){}
       }
     }
     // After stream ends, poll until present
@@ -336,6 +382,10 @@ async function checkModel(){
 document.getElementById('intentToggle').onclick = ()=>{
   const p = document.getElementById('intentPanel');
   p.style.display = (p.style.display==='block'?'none':'block');
+  // Refresh editors after becoming visible
+  if(p.style.display==='block'){
+    setTimeout(()=>{ try{ uiaEd && uiaEd.refresh(); apaEd && apaEd.refresh(); aprEd && aprEd.refresh(); stepsEd && stepsEd.refresh(); }catch(_){} }, 0);
+  }
 }
 
 function needConfirmIntent(prompt){
@@ -407,6 +457,9 @@ async function replan(){
 function toggleAudit(){
   const a = document.getElementById('auditPanel');
   a.style.display = (a.style.display==='block'?'none':'block');
+  if(a.style.display==='block'){
+    setTimeout(()=>{ try{ auditEd && auditEd.refresh(); }catch(_){} }, 0);
+  }
 }
 
 function startAudit(){
