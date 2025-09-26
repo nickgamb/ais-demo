@@ -1,0 +1,9 @@
+{
+  "@type": "APr",
+  "id": "urn:apr:test-pass",
+  "uia": "urn:uia:test-min",
+  "apa": "urn:apa:test-1",
+  "method": "semantic-entailment-v1",
+  "evidence": {"coverage": 1.0, "risk": 0.0},
+  "proof": {}
+}

@@ -148,9 +148,24 @@ Model cache layout (bind‑mounted):
 
 ---
 
+## Spec & Resources
+- Primitives and profiles: `spec/AIS-primitives.md`
+- Schemas: `spec/AIS-schemas.md`
+- Flows + demo endpoints: `spec/AIS-flows.md`
+- Registries: `spec/REGISTRIES.md`
+- Conformance: `spec/CONFORMANCE.md`
+- Error codes: `spec/ERRORS.md`
+- OpenTelemetry: `spec/OTEL.md`
+- Test vectors: `spec/test-vectors/`
+- Postman collection: `spec/postman_collection.json`
+
+Contributing and security:
+- `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`
+
+---
+
 ## License and Notices
 - License: see the repository’s `LICENSE` file for full terms.
 - Third‑party: see `THIRD_PARTY_NOTICES.md` (or equivalent notices file) for attributions and license details of bundled/used components (e.g., Ollama, CodeMirror, and other dependencies).
-- Copyright: as specified in the repository copyright notice.
 
 

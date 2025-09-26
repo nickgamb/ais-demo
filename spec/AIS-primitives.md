@@ -52,11 +52,6 @@ Semantics:
 - Coverage ≥ threshold AND risk ≤ budget required by local policy.
 - Supports zero‑knowledge or redacted proofs in future profiles.
 
-Audit profile (minimum interoperable event fields)
-- Append JSON lines with: `ts`, `uia`, `apa`, `ibe`, `tca`, `tool`, `ok`, `hashes?`, `redactions?`.
-- Privacy: store references and hashes, not raw prompts/outputs.
-- Stapling: tools SHOULD include last‑seen UIA/APA revocation status.
-
 Verifier profile: `semantic-entailment-v1` (non‑normative → can be normative via test vectors)
 - Inputs: UIA.purpose (string), APA (steps with args), optional policy profile.
 - Procedure: extract lowercase keywords (≥4 chars) from purpose; a step entails if its prompt/url contains any keyword; coverage = alignedSteps/totalSteps; risk baseline 0, +0.5 if predictedWrites>0, +0.3 if purpose suggests outbound actions (send/post/write/export/email/delete); clamp to [0,1].
@@ -98,7 +93,44 @@ Fields:
 - Short‑lived CRLs for UIA and APA; IBE validity MUST be bounded.
 - Revocation status SHOULD be cached and stapled by clients where feasible.
 
+### 8.1 Revocation Format (CRL)
+Non-normative JSON example:
+```json
+{
+  "@type": "CRL",
+  "issued": "2025-01-01T00:00:00Z",
+  "expires": "2025-01-01T00:10:00Z",
+  "revoked": [
+    {"type": "UIA", "id": "urn:uia:...", "reason": "user-revoked"},
+    {"type": "APA", "id": "urn:apa:...", "reason": "superseded"}
+  ]
+}
+```
+Stapling: tools SHOULD include last-seen CRL `issued` and `expires` in IBE verification context and audit events.
+
 ### 9. Trust Model
 - Users authorize UIA; agents propose APA; independent verifiers issue APr; tool operators publish TCA; tools enforce IBE.
+
+---
+
+## Appendix A: Canonicalization & Signing (Normative)
+
+- Payload canonicalization: JSON with UTF‑8, object keys sorted lexicographically by Unicode code point, no insignificant whitespace.
+- Numeric normalization: integers as digits, floats with minimal representation; timestamps RFC3339 UTC.
+- IBE signing input: the IBE object with `sig` field omitted/blanked, canonicalized as above.
+- JWS: HS256 (demo) or registered alg with `typ":"JWT"`. The signature covers `b64url(header) + '.' + b64url(canonicalized payload)`.
+- Clock skew: verifiers MUST allow ≤ 120 seconds.
+
+Golden example (payload excerpt, canonicalized and signed):
+```json
+{"@type":"IBE","aprRef":"urn:apr:abc","apaStepRef":"s1","exp":"2099-01-01T00:00:00Z","id":"urn:ibe:xyz","nonce":"abcd","tcaRef":"urn:tca:ollama.generate@1","uiaRef":"urn:uia:foo"}
+```
+Header:
+```json
+{"alg":"HS256","typ":"JWT"}
+```
+Signing input: `base64url(header) + '.' + base64url(payload)` → signature = `HMAC-SHA256(secret, input)`.
+
+Implementations MUST reproduce the byte-for-byte payload when verifying.
 
 

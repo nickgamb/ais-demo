@@ -1,0 +1,11 @@
+{
+  "@type": "APA",
+  "id": "urn:apa:test-1",
+  "uia": "urn:uia:test-min",
+  "model": {"hash": "ollama-local"},
+  "steps": [
+    {"id": "s1", "tool": "ollama.generate", "args": {"prompt": "Summarize chat"}, "expected": {"dataClasses": ["derived"], "writes": 0}, "alignment": {"score": 1.0}}
+  ],
+  "totals": {"predictedWrites": 0, "predictedRecords": 1},
+  "proof": {}
+}

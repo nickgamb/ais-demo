@@ -1,0 +1,11 @@
+{
+  "@type": "IBE",
+  "id": "urn:ibe:test-expired",
+  "uiaRef": "urn:uia:test-min",
+  "apaStepRef": "s1",
+  "aprRef": "urn:apr:test-pass",
+  "tcaRef": "urn:tca:ollama.generate@1",
+  "nonce": "deadbeef",
+  "exp": "2000-01-01T00:00:00Z",
+  "sig": "not-a-real-signature"
+}

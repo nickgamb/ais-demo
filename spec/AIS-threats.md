@@ -23,6 +23,9 @@
 - APr thresholds, randomized re‑verification, multi‑agent cross‑check.
 
 7) Privacy leakage via audit
-- Redaction, hashing, selective disclosure, split storage for keys vs events.
+- Redaction, hashing, selective disclosure, split storage for keys vs events; retention and purpose limitation.
+
+8) Time and revocation abuse
+- CRLs with short TTL; stapling; strict clock skew; fail‑closed on stale status.
 
 

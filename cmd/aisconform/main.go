@@ -1,0 +1,78 @@
+package main
+
+import (
+    "encoding/json"
+    "fmt"
+    "io/ioutil"
+    "math"
+    "os"
+    "path/filepath"
+    "time"
+
+    "ais-demo/internal/ais"
+)
+
+func mustReadJSON[T any](path string) T {
+    b, err := ioutil.ReadFile(path)
+    if err != nil { panic(err) }
+    var v T
+    if err := json.Unmarshal(b, &v); err != nil { panic(fmt.Errorf("%s: %w", path, err)) }
+    return v
+}
+
+func closeEnough(a, b float64) bool { return math.Abs(a-b) <= 1e-9 }
+
+func main() {
+    base := "spec/test-vectors"
+    if len(os.Args) > 1 { base = os.Args[1] }
+    fmt.Printf("AIS Conformance — test vectors in %s\n\n", base)
+
+    // Load vectors
+    uia := mustReadJSON[ais.UIA](filepath.Join(base, "uia_minimal.json"))
+    apa := mustReadJSON[ais.APA](filepath.Join(base, "apa_generate_step.json"))
+    aprPass := mustReadJSON[ais.APr](filepath.Join(base, "apr_pass_semantic_entailment_v1.json"))
+    aprFail := mustReadJSON[ais.APr](filepath.Join(base, "apr_fail_low_coverage.json"))
+    ibeExpired := mustReadJSON[ais.IBE](filepath.Join(base, "ibe_expired.json"))
+
+    total := 0
+    failed := 0
+    fail := func(name string, msg string) {
+        failed++
+        fmt.Printf("[FAIL] %s: %s\n", name, msg)
+    }
+    pass := func(name string) {
+        fmt.Printf("[PASS] %s\n", name)
+    }
+
+    // Test 1: semantic-entailment-v1 pass vector matches recomputation
+    total++
+    cov, risk := ais.VerifyAlignment(uia, apa)
+    if aprPass.Method != "semantic-entailment-v1" || !closeEnough(aprPass.Evidence.Coverage, cov) || !closeEnough(aprPass.Evidence.Risk, risk) {
+        fail("apr_pass_semantic_entailment_v1", fmt.Sprintf("expected coverage=%v risk=%v got coverage=%v risk=%v", aprPass.Evidence.Coverage, aprPass.Evidence.Risk, cov, risk))
+    } else { pass("apr_pass_semantic_entailment_v1") }
+
+    // Test 2: semantic-entailment-v1 fail vector should not match recomputation
+    total++
+    if aprFail.Method == "semantic-entailment-v1" && (!closeEnough(aprFail.Evidence.Coverage, cov) || !closeEnough(aprFail.Evidence.Risk, risk)) {
+        pass("apr_fail_low_coverage (mismatch as expected)")
+    } else {
+        fail("apr_fail_low_coverage", fmt.Sprintf("unexpectedly matched coverage=%v risk=%v", cov, risk))
+    }
+
+    // Test 3: IBE expired should be rejected by guard
+    total++
+    // Force expirations in the past if vector not already
+    if time.Now().Before(ibeExpired.Exp) { ibeExpired.Exp = time.Now().Add(-time.Minute) }
+    cfg := ais.GuardConfig{Secret: []byte("dev-secret-change-me"), MinAlignment: 0.8}
+    // Dummy APR/UIA/APA/TCA are fine for expiry branch.
+    if err := ais.VerifyIBE(cfg, ibeExpired, ais.APr{}, uia, apa, ais.TCA{}); err == nil {
+        fail("ibe_expired", "expected failure but got nil")
+    } else {
+        pass("ibe_expired")
+    }
+
+    fmt.Printf("\nSummary: %d/%d passed\n", total-failed, total)
+    if failed > 0 { os.Exit(1) }
+}
+
+

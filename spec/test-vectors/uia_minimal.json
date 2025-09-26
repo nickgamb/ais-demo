@@ -1,0 +1,10 @@
+{
+  "@type": "UIA",
+  "id": "urn:uia:test-min",
+  "subject": {"id": "user:test"},
+  "purpose": "Chat: summarize",
+  "constraints": {"dataClasses": ["internal","derived"], "timeWindow": {"notAfter": "2099-01-01T00:00:00Z"}},
+  "riskBudget": {"level": 1, "maxWrites": 0, "maxRecords": 1000},
+  "policyProfile": "chat-readonly",
+  "proof": {}
+}

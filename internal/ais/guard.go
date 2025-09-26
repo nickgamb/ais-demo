@@ -10,12 +10,12 @@ import (
 type GuardConfig struct { Secret []byte; MinAlignment float64 }
 
 func VerifyIBE(cfg GuardConfig, ibe IBE, apr APr, uia UIA, apa APA, tca TCA) error {
-    if time.Now().After(ibe.Exp) { return errors.New("ibe expired") }
+    if time.Now().After(ibe.Exp) { return errors.New("IBE-EXPIRED") }
     // Verify signature over the envelope WITHOUT the Sig field
     ibeForSig := ibe
     ibeForSig.Sig = ""
     ok, err := VerifyJWSObject(cfg.Secret, ibeForSig, ibe.Sig)
-    if err != nil || !ok { return errors.New("invalid ibe signature") }
+    if err != nil || !ok { return errors.New("IBE-SIG-INVALID") }
     // Verify APr deterministically based on simple semantic entailment heuristic
     cov, risk := VerifyAlignment(uia, apa)
     if apr.Method == "semantic-entailment-v1" {
@@ -24,16 +24,16 @@ func VerifyIBE(cfg GuardConfig, ibe IBE, apr APr, uia UIA, apa APA, tca TCA) err
             return errors.New("apr evidence mismatch")
         }
     }
-    if cov < cfg.MinAlignment { return errors.New("alignment below threshold") }
+    if cov < cfg.MinAlignment { return errors.New("ALIGN-BELOW-THRESHOLD") }
 	if apa.Totals.PredictedWrites > uia.RiskBudget.MaxWrites { return errors.New("risk budget exceeded: writes") }
 	var step *APAStep
 	for i := range apa.Steps { if apa.Steps[i].ID == ibe.APAStepRef { step = &apa.Steps[i]; break } }
-	if step == nil { return errors.New("apa step not found") }
-	for _, dc := range step.Expected.DataClasses { if !slices.Contains(uia.Constraints.DataClasses, dc) { return errors.New("step data class not permitted by UIA") } }
+    if step == nil { return errors.New("IBE-STEP-NOT-FOUND") }
+    for _, dc := range step.Expected.DataClasses { if !slices.Contains(uia.Constraints.DataClasses, dc) { return errors.New("DATA-CLASS-NOT-PERMITTED") } }
 	var op *TCAOperation
 	for i := range tca.Operations { if tca.Operations[i].Name == step.Tool { op = &tca.Operations[i]; break } }
-	if op == nil { return errors.New("tool op not allowed by TCA") }
-	if step.Expected.Writes > op.Effects.Writes { return errors.New("step writes exceed TCA effects") }
+    if op == nil { return errors.New("TCA-OP-NOT-ALLOWED") }
+    if step.Expected.Writes > op.Effects.Writes { return errors.New("TCA-EFFECTS-EXCEEDED") }
 	return nil
 }
 
